@@ -1,70 +1,113 @@
-# app.py: SeoulMetro 시각화를 위한 Streamlit 애플리케이션 실행 파일
-
-# 사용하지 않는 변수에 대한 pylint 경고를 무시
-# pylint: disable=unused-variable 
-# 문자열에서 비정상적인 백슬래시 pylint 경고를 무시
-# pylint: disable=anomalous-backslash-in-string 
-
-"""
-종속성(Dependencies):
-데이터 - geojson (위도와 경도 정보 포함)
-
-모듈(modules):
-frontend.py - 프론트엔드 작업
-generic.py - 일일 통계와 지도 데이터를 로드
-"""
-
 import streamlit as st
 import pandas as pd
-import generic
-import frontend
 import pydeck as pdk
-import math
 
-# 데이터 파일 경로 설정
-file_path = {'data':'data/SeoulMetro_'}  
-# file_list = {'map':'Stations.csv','raw':['202004.csv','202005.csv']}
-file_list = {'map':'Stations.csv','raw':['202004.csv','202005.csv','202006.csv','202007.csv','202008.csv','202009.csv']} # 지도 및 원시 데이터 파일 설정
+# File path for the merged data
+file_path = "data/Merged_Subway_Data.csv"
+data = pd.read_csv(file_path)
 
-line_mapping = { # 지하철 노선 맵핑
-    '1호선':['1호선','경원선', '경인선', '경부선', '장항선'],
-    '3호선':['3호선','일산선'],
-    '4호선':['4호선','안산선','과천선'],
-    '9호선':['9호선','9호선2~3단계'],
-    '수인/분당선':['수인선','분당선'],
-    '경의/중앙선':['경의선','중앙선'],
-    '공항철도':['공항철도 1호선']
+# Define line-specific colors
+line_colors = {
+    "1호선": "#0052A4",
+    "2호선": "#009D3E",
+    "3호선": "#EF7C1C",
+    "4호선": "#00A5DE",
+    "5호선": "#996CAC",
+    "6호선": "#CD7C2F",
+    "7호선": "#747F00",
+    "8호선": "#EA545D",
+    "9호선": "#A17E46",
+    "신림선": "#6789CA",
+    "우이신설선": "#B0CE18"
 }
 
-color_set = { # 지하철 노선별 색상 설정
-    '1호선':'#0052A4', '2호선':'#009D3E', '3호선':'#EF7C1C',
-    '4호선':'#00A5DE', '5호선':'#996CAC', '6호선':'#CD7C2F',
-    '7호선':'#747F00', '8호선':'#EA545D', '9호선':'#A17E46',
-    '수인/분당선':'#F5A200', '우이신설선':'#B0CE18', '공항철도':'#0090D2'
-}
+# Ensure '사용월' is treated as a string
+data['Date'] = data['사용월'].astype(str)
+data['Month'] = data['Date'].str[4:6]  # Extract month
 
-# 헤더 섹션
-st.title('서울 수도권 지하철 이용 현황') # 제목 설정
-update_status = st.markdown("원시 데이터를 불러오는 중...") # 사이드바에 표시될 데이터의 사전 로드 상태 업데이트
+# Map line colors to a new column and fill NaN values with a default color
+data['LineColor'] = data['Line'].map(line_colors).fillna("#808080")  # Default color: gray
 
-# 데이터 전처리
-data = generic.preprocess(file_path['data'], [file_list['raw'], file_list['map']], line_mapping, color_set)
-update_status.markdown('데이터 로드 완료!')
+# Convert hex colors to RGB and handle potential NaN values
+def hex_to_rgb(hex_color):
+    """Convert HEX color to RGB tuple. Default to gray if invalid."""
+    try:
+        return [int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16), 160]
+    except (TypeError, ValueError):
+        return [128, 128, 128, 160]  # Gray color with transparency
 
-# 사이드바 섹션 (주요 섹터, 지역 및 연도 선택)
-min_date, max_date = frontend.display_sidebar(data) # 사용자 선택값을 반환
+data['RGBColor'] = data['LineColor'].apply(hex_to_rgb)
 
-# 메인 섹션
-# # 차트 표시
-# weights = [] # `weights` 정의 필요 (없다면 빈 리스트로 초기화)
-# sel_focus = [0] # 선택된 항목 (예시로 첫 번째 항목 선택)
-# frontend.show_chart(data, weights[int(sel_focus[0])]) # 차트 표시
+# Extract unique time slots from column names
+time_slots = list(
+    {col.split(" ")[0] for col in data.columns if "승차인원" in col or "하차인원" in col}
+)
 
-# 지도 표시
-frontend.animate_maps(data, color_set, min_date, max_date) # pydeck 애니메이션 지도 표시
+# Streamlit app configuration
+st.title("2024년 서울 지하철 시간대별 이용 현황")
+st.sidebar.header("옵션 선택")
 
-# 하단의 크레딧 섹션
-st.subheader('출처')
-data_source = '서울 열린데이터 광장(https://data.seoul.go.kr)'
-st.write('데이터 출처: ' + data_source)
-st.write('지도 제공: Mapbox, OpenStreetMap')
+# Month selection
+month_options = sorted(data['Month'].unique())
+selected_month = st.sidebar.selectbox("월 선택 (1월 ~ 10월)", month_options)
+
+# Time slot selection
+selected_time_slot = st.sidebar.selectbox("시간대 선택", sorted(time_slots))
+
+# Circle size scaling factor selection
+scale_factor = st.sidebar.slider("동그라미 크기 배율", min_value=100, max_value=1000, step=50, value=500)
+
+# Filter data for the selected month
+filtered_data = data[data['Month'] == selected_month]
+
+# Filter data for the selected time slot
+entry_column = f"{selected_time_slot} 승차인원"
+exit_column = f"{selected_time_slot} 하차인원"
+
+if entry_column not in filtered_data.columns or exit_column not in filtered_data.columns:
+    st.error(f"선택한 시간대 데이터가 없습니다: {selected_time_slot}")
+    st.stop()
+
+filtered_data['Users'] = filtered_data[entry_column] + filtered_data[exit_column]
+filtered_data['Size'] = filtered_data['Users'] / filtered_data['Users'].max() * scale_factor  # Dynamic scaling
+
+# Pydeck visualization
+st.subheader(f"{selected_month}월 [{selected_time_slot}] 평균")
+view_state = pdk.ViewState(
+    latitude=filtered_data['Latitude'].mean(),
+    longitude=filtered_data['Longitude'].mean(),
+    zoom=10,
+    pitch=50
+)
+
+circle_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=filtered_data,
+    get_position="[Longitude, Latitude]",
+    get_fill_color="RGBColor",
+    get_radius="Size",
+    pickable=True,
+    auto_highlight=True
+)
+
+deck = pdk.Deck(
+    layers=[circle_layer],
+    initial_view_state=view_state,
+    tooltip={
+        "html": "<b>역명:</b> {Station} <br><b>시간대 이용자:</b> {Users}",
+        "style": {"backgroundColor": "steelblue", "color": "white"}
+    }
+)
+
+# Display map
+st.pydeck_chart(deck)
+
+# Additional information
+st.sidebar.markdown("지도에서 동그라미 크기는 시간대별 상대적인 이용자 수를 나타냅니다.")
+st.sidebar.markdown("동그라미 색상은 실제 노선별 색상으로 표시됩니다.")
+st.markdown("데이터 출처: 서울 열린데이터 광장(https://data.seoul.go.kr)")
+st.markdown("지도 제공: Mapbox, OpenStreetMap")
+
+# Footer
+st.markdown("---")  # 구분선
+st.markdown("Powered by 캡스톤디자인 Skynet팀")
