@@ -110,4 +110,4 @@ st.markdown("지도 제공: Mapbox, OpenStreetMap")
 
 # Footer
 st.markdown("---")  # 구분선
-st.markdown("Powered by 캡스톤디자인 Skynet팀")
+st.markdown("Powered by Skynet")
